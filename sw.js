@@ -1,8 +1,13 @@
-/* BG Products dashboard — service worker.
-   Purpose: make the dashboard installable as an app and available OFFLINE after the first visit.
-   Update handling is done in the page (it checks version.txt) so this worker can stay simple. */
+/* BG Products dashboard — service worker (v2, update-safe).
+   Purpose: installable app + offline after first visit, WITHOUT ever masking a new deploy.
+   Key rules:
+     - version.txt and sw.js are NEVER served from cache (always network, no-store) so the
+       in-page "update available" check and the worker itself always see the latest.
+     - HTML navigations are network-first with no-store, so an online visit always gets the
+       newest dashboard; the cached copy is used only when truly offline.
+     - icons/manifest stay cache-first (they rarely change). */
 
-var CACHE = 'bg-dash-shell-v1';
+var CACHE = 'bg-dash-shell-v2';
 var SHELL = [
   './',
   './index.html',
@@ -38,13 +43,23 @@ self.addEventListener('fetch', function (e) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;   // skip blob:, data:, chrome-extension:
   if (url.origin !== self.location.origin) return;                    // only our own files
 
+  var path = url.pathname;
+
+  // version.txt and sw.js: ALWAYS network, never cached — this is what makes updates show.
+  if (/\/version\.txt$/.test(path) || /\/sw\.js$/.test(path)) {
+    e.respondWith(
+      fetch(req.url, { cache: 'no-store' }).catch(function () { return caches.match(req); })
+    );
+    return;
+  }
+
   var isHTML = req.mode === 'navigate' || (req.headers.get('accept') || '').indexOf('text/html') >= 0;
 
   if (isHTML) {
-    // Network-first so an online visit always gets the latest deployed dashboard; fall back to
-    // the cached copy when offline.
+    // Network-first with no-store so an online visit always gets the latest deployed dashboard;
+    // fall back to the cached copy only when offline.
     e.respondWith(
-      fetch(req).then(function (res) {
+      fetch(req.url, { cache: 'no-store' }).then(function (res) {
         try { var copy = res.clone(); caches.open(CACHE).then(function (c) { c.put('./index.html', copy); }); } catch (err) {}
         return res;
       }).catch(function () {
